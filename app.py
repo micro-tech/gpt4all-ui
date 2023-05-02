@@ -22,6 +22,7 @@ import re
 import traceback
 import threading
 import sys
+from pyaipersonality import AIPersonality
 from pyGpt4All.db import DiscussionsDB, Discussion
 from flask import (
     Flask,
@@ -35,8 +36,11 @@ from flask import (
 from flask_socketio import SocketIO, emit
 from pathlib import Path
 import gc
+from geventwebsocket.handler import WebSocketHandler
+from gevent.pywsgi import WSGIServer
+
 app = Flask("GPT4All-WebUI", static_url_path="/static", static_folder="static")
-socketio = SocketIO(app)
+socketio = SocketIO(app, async_mode='gevent', ping_timeout=30, ping_interval=15)
 app.config['SECRET_KEY'] = 'secret!'
 # Set the logging level to WARNING or higher
 logging.getLogger('socketio').setLevel(logging.WARNING)
@@ -219,7 +223,7 @@ class Gpt4AllWebUI(GPT4AllAPI):
     
     def list_personalities(self):
         personalities_dir = Path(f'./personalities/{self.config["personality_language"]}/{self.config["personality_category"]}')  # replace with the actual path to the models folder
-        personalities = [f.stem for f in personalities_dir.glob('*.yaml')]
+        personalities = [f.stem for f in personalities_dir.iterdir() if f.is_dir()]
         return jsonify(personalities)
 
     def list_languages(self):
@@ -294,14 +298,14 @@ class Gpt4AllWebUI(GPT4AllAPI):
         if self.current_discussion:
             # First we need to send the new message ID to the client
             response_id = self.current_discussion.add_message(
-                self.personality["name"], "", parent = message_id
+                self.personality.name, "", parent = message_id
             )  # first the content is empty, but we'll fill it at the end
             socketio.emit('infos',
                     {
                         "type": "input_message_infos",
-                        "bot": self.personality["name"],
-                        "user": self.personality["user_name"],
-                        "message":markdown.markdown(message),
+                        "bot": self.personality.name,
+                        "user": self.personality.user_name,
+                        "message":message,#markdown.markdown(message),
                         "id": message_id,
                         "response_id": response_id,
                     }
@@ -314,15 +318,25 @@ class Gpt4AllWebUI(GPT4AllAPI):
             self.generating = True
             # app.config['executor'] = ThreadPoolExecutor(max_workers=1)
             # app.config['executor'].submit(self.generate_message)
-            print("## Generate message ##")
+            print("## Generating message ##")
             self.generate_message()
+
+            print()
             print("## Done ##")
+            print()
+
+            # Send final message
+            self.socketio.emit('final', {'data': self.bot_says})
+
             self.current_discussion.update_message(response_id, self.bot_says)
             self.full_message_list.append(self.bot_says)
             self.cancel_gen = False
             return bot_says
         else:
+            #No discussion available
+            print()
             print("## Done ##")
+            print()
             return ""
     
      
@@ -348,8 +362,8 @@ class Gpt4AllWebUI(GPT4AllAPI):
             else:
                 self.current_discussion = self.db.create_discussion()
         messages = self.current_discussion.get_messages()
-        for message in messages:
-            message["content"] = markdown.markdown(message["content"])
+        #for message in messages:
+        #    message["content"] =  markdown.markdown(message["content"])
         
         return jsonify(messages), {'Content-Type': 'application/json; charset=utf-8'}
 
@@ -394,7 +408,7 @@ class Gpt4AllWebUI(GPT4AllAPI):
         # target=self.create_chatbot()
         
         # Return a success response
-        return json.dumps({"id": self.current_discussion.discussion_id, "time": timestamp, "welcome_message":self.personality["welcome_message"], "sender":self.personality["name"]})
+        return json.dumps({"id": self.current_discussion.discussion_id, "time": timestamp, "welcome_message":self.personality.welcome_message, "sender":self.personality.name})
 
     def set_backend(self):
         data = request.get_json()
@@ -447,9 +461,9 @@ class Gpt4AllWebUI(GPT4AllAPI):
         self.config['personality_category'] = personality_category
         self.config['personality'] = personality
 
-        personality_fn = f"personalities/{self.config['personality_language']}/{self.config['personality_category']}/{self.config['personality']}.yaml"
+        personality_fn = f"personalities/{self.config['personality_language']}/{self.config['personality_category']}/{self.config['personality']}"
         print(f"Loading personality : {personality_fn}")
-        self.personality = load_config(personality_fn)
+        self.personality = AIPersonality(personality_fn)
 
         self.config['n_predict'] = int(data["nPredict"])
         self.config['seed'] = int(data["seed"])
@@ -590,13 +604,34 @@ if __name__ == "__main__":
         if arg_value is not None:
             config[arg_name] = arg_value
 
-    personality = load_config(f"personalities/{config['personality_language']}/{config['personality_category']}/{config['personality']}.yaml")
+    personality = AIPersonality(f"personalities/{config['personality_language']}/{config['personality_category']}/{config['personality']}")
 
     # executor = ThreadPoolExecutor(max_workers=1)
     # app.config['executor'] = executor
     bot = Gpt4AllWebUI(app, socketio, config, personality, config_file_path)
 
+    # chong Define custom WebSocketHandler with error handling 
+    class CustomWebSocketHandler(WebSocketHandler):
+        def handle_error(self, environ, start_response, e):
+            # Handle the error here
+            print("WebSocket error:", e)
+            super().handle_error(environ, start_response, e)
+    
+    url = f'http://{config["host"]}:{config["port"]}'
+    
+    print(f"Please open your browser and go to {url} to view the ui")
+
+    # chong -add socket server    
+    app.config['debug'] = config["debug"]
+
     if config["debug"]:
-        app.run(debug=True, host=config["host"], port=config["port"])
+        print("debug mode:true")    
     else:
-        app.run(host=config["host"], port=config["port"])
+        print("debug mode:false")
+        
+    http_server = WSGIServer((config["host"], config["port"]), app, handler_class=WebSocketHandler)
+    http_server.serve_forever()
+    #if config["debug"]:
+    #    app.run(debug=True, host=config["host"], port=config["port"])
+    #else:
+    #    app.run(host=config["host"], port=config["port"])

@@ -142,14 +142,14 @@ dmypy.json
 
 # Temporary files
 tmp/
-
+temp/
 # configurations other than the default one
 configs/*
 !configs/default.yaml
 
 # personalities other than the default one
 personalities/*
-!personalities/english/general/gpt4all_chatbot.yaml
+!personalities/english/general/gpt4all_chatbot/config.yaml
 
 # personalities other than the default one
 databases/*
