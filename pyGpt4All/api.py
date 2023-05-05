@@ -177,8 +177,8 @@ class GPT4AllAPI():
         sys.stdout.flush()
         
         self.bot_says += text
-        if not self.personality.user_message_prefix.strip().lower() in self.bot_says.lower():
-            self.socketio.emit('message', {'data': self.bot_says});
+        if not self.personality.detect_antiprompt(self.bot_says):
+            self.socketio.emit('message', {'data': self.bot_says})
             if self.cancel_gen:
                 print("Generation canceled")
                 self.cancel_gen = False
@@ -196,16 +196,30 @@ class GPT4AllAPI():
         total_n_predict = self.config['n_predict']
         print(f"Generating {total_n_predict} outputs... ")
         print(f"Input text : {self.discussion_messages}")
-        self.chatbot_bindings.generate(
-            self.discussion_messages,
-            new_text_callback=self.new_text_callback,
-            n_predict=total_n_predict,
-            temp=self.config['temp'],
-            top_k=self.config['top_k'],
-            top_p=self.config['top_p'],
-            repeat_penalty=self.config['repeat_penalty'],
-            repeat_last_n = self.config['repeat_last_n'],
-            #seed=self.config['seed'],
-            n_threads=self.config['n_threads']
-        )
+        if self.config["override_personality_model_parameters"]:
+            self.chatbot_bindings.generate(
+                self.discussion_messages,
+                new_text_callback=self.new_text_callback,
+                n_predict=total_n_predict,
+                temp=self.config['temperature'],
+                top_k=self.config['top_k'],
+                top_p=self.config['top_p'],
+                repeat_penalty=self.config['repeat_penalty'],
+                repeat_last_n = self.config['repeat_last_n'],
+                #seed=self.config['seed'],
+                n_threads=self.config['n_threads']
+            )
+        else:
+            self.chatbot_bindings.generate(
+                self.discussion_messages,
+                new_text_callback=self.new_text_callback,
+                n_predict=total_n_predict,
+                temp=self.personality.model_temperature,
+                top_k=self.personality.model_top_k,
+                top_p=self.personality.model_top_p,
+                repeat_penalty=self.personality.model_repeat_penalty,
+                repeat_last_n = self.personality.model_repeat_last_n,
+                #seed=self.config['seed'],
+                n_threads=self.config['n_threads']
+            )
         self.generating=False
